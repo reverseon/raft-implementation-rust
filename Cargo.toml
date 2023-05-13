@@ -5,4 +5,25 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "raft-node-server"
+path = "src/node_srv.rs"
+
+[[bin]]
+name = "raft-client"
+path = "src/client.rs"
+
+[[bin]]
+name = "trial"
+path = "src/coba.rs"
+
 [dependencies]
+prost = "0.11.9"
+tokio = { version = "1.28.0", features = ["macros", "rt-multi-thread"] }
+tonic = "0.9.2"
+serde = { version="1.0.162", features= ["derive"]}
+serde_json = "1.0.96"
+rand = "0.8.4"
+
+[build-dependencies]
+tonic-build = "0.9.2"
