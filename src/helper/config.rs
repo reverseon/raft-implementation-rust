@@ -1,13 +1,15 @@
+use std::{collections::HashSet, hash::Hash};
+
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Config {
-    pub node_address_list: Vec<std::net::SocketAddr>,
+    pub node_address_list: HashSet<std::net::SocketAddr>,
 }
 
 
 impl Config {
     pub fn new() -> Self {
         Config {
-            node_address_list: Vec::new(),
+            node_address_list: HashSet::new(),
         }
     }
 
@@ -15,11 +17,11 @@ impl Config {
         let json_string = super::rw::read_file_create_file_and_dir_if_not_exist(json_filename.clone());
         if json_string == "" {
             // initialize
-            self.node_address_list = Vec::new();
+            self.node_address_list = HashSet::new();
             self.save_to_json(json_filename);
         } else {
             let json: serde_json::Value = serde_json::from_str(&json_string).expect("Error parsing JSON file");
-            let node_address_list: Vec<std::net::SocketAddr> = serde_json::from_value(json["node_address_list"].clone()).expect("Error parsing JSON file");
+            let node_address_list: HashSet<std::net::SocketAddr> = serde_json::from_value(json["node_address_list"].clone()).expect("Error parsing JSON file");
             self.node_address_list = node_address_list;
         }
     }
