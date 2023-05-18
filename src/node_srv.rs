@@ -307,7 +307,12 @@ async fn blast_heartbeat() {
                     return;
                 }
             };
-            channel.heartbeat(request).await.unwrap();
+            match channel.heartbeat(request).await {
+                Ok(_) => {
+                }
+                Err(_) => {
+                }
+            };
         });
     }
 
@@ -366,11 +371,6 @@ impl RaftRpc for RaftRpcImpl {
         let is_log_up_to_date = (candidate_last_log_term > last_log_term) 
         || (candidate_last_log_term == last_log_term && candidate_last_log_index >= get_last_log_index().await);
         // debug
-        // println!("Candidate term: {}", candidate_term);
-        // println!("Candidate ID: {}", candidate_id);
-        // println!("Current term: {}", get_current_term());
-        // println!("Voted for: {:?}", get_voted_for());
-        // println!("Is log up to date: {}", is_log_up_to_date);
         if candidate_term == get_current_term().await 
         && (get_voted_for().await.is_none() || get_voted_for().await.unwrap() == candidate_id) 
         && is_log_up_to_date {
