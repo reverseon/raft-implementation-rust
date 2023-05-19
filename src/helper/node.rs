@@ -48,6 +48,7 @@ impl Persistent {
 
 #[derive(Debug, Clone)]
 pub struct Node {
+    pub leader_address: Option<std::net::SocketAddr>,
     pub address: std::net::SocketAddr,
     pub current_term: i32,
     pub voted_for: Option<i32>,
@@ -62,6 +63,7 @@ pub struct Node {
 impl Node {
     pub fn new(address: std::net::SocketAddr) -> Self {
         Node {
+            leader_address: None,
             address,
             current_term: 0,
             voted_for: None,

@@ -9,6 +9,7 @@ message AppendEntriesRequest {
     int32 prevLogTerm = 4;
     repeated LogEntry entries = 5;
     int32 leaderCommit = 6;
+    string leaderAddress = 7;
 }
 
 message AppendEntriesResponse {
@@ -21,6 +22,7 @@ message RequestVoteRequest {
     int32 candidateId = 2;
     int32 lastLogIndex = 3;
     int32 lastLogTerm = 4;
+    string candidateAddress = 5;
 }
 
 message RequestVoteResponse {
@@ -34,6 +36,22 @@ message LogEntry {
     string command = 3;
 }
 
+message JoinRequest {
+    string address = 1;
+}
+
+message JoinResponse {
+    bool success = 1;
+}
+
+message UpdateConfigRequest {
+    repeated string addresses = 1;
+}
+
+message UpdateConfigResponse {
+    bool success = 1;
+}
+
 message Empty {
 }
 
@@ -41,6 +59,8 @@ service RaftRpc {
     rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
     rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
     rpc Heartbeat(AppendEntriesRequest) returns (Empty);
+    rpc Join(JoinRequest) returns (JoinResponse);
+    rpc UpdateConfig(UpdateConfigRequest) returns (UpdateConfigResponse);
 }
 
 

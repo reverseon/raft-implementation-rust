@@ -24,6 +24,7 @@ impl LazyReconnectingChannelPool {
         let mut channels = self.channels.lock().await;
         sockets.insert(socket);
         if channels.get(&socket).unwrap().is_none() {
+            println!("Masuk sini bos");
             let channel = match RaftRpcClient::connect(
                 format!("http://{}", socket.to_string())
             ).await {
@@ -31,6 +32,7 @@ impl LazyReconnectingChannelPool {
                 Err(_) => None,
             };
             channels.insert(socket, channel.clone());
+            // debug print channels
         }
         channels.get(&socket).unwrap().clone()
     }
@@ -39,7 +41,9 @@ impl LazyReconnectingChannelPool {
         let mut sockets = self.sockets.lock().await;
         let mut channels = self.channels.lock().await;
         sockets.insert(socket);
-        channels.insert(socket, None);
+        if !channels.contains_key(&socket) {
+            channels.insert(socket, None);
+        }
     }
 
     pub async fn remove_channel(&self, socket: SocketAddr) {
@@ -47,6 +51,24 @@ impl LazyReconnectingChannelPool {
         let mut channels = self.channels.lock().await;
         sockets.remove(&socket);
         channels.remove(&socket);
+    }
+
+    pub async fn get_random_channel(&self) -> Option<RaftRpcClient<Channel>> {
+        let sockets = self.sockets.lock().await;
+        let channels = self.channels.lock().await;
+        let socket = sockets.iter().next().unwrap();
+        match channels.get(socket).unwrap().clone() {
+            Some(channel) => Some(channel),
+            None => {
+                let channel = match RaftRpcClient::connect(
+                    format!("http://{}", socket.to_string())
+                ).await {
+                    Ok(channel) => Some(channel),
+                    Err(_) => None,
+                };
+                channel
+            }
+        }
     }
 }
 
