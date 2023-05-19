@@ -5,6 +5,8 @@ use std::sync::{Arc};
 use tokio::sync::{RwLock};
 use std::time::{Instant, Duration};
 use std::collections::{HashSet, HashMap};
+use rand::Rng;
+
 
 use helper::config::Config;
 use helper::node::Node;
@@ -25,7 +27,7 @@ const HOST: IpAddr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
 static mut PORT: u16 = 24341;
 static mut NODE_INSTANCE: Option<RwLock<Node>> = None;
 static mut HEARTBEAT_TIMER: Option<RwLock<RandomizedTimer>> = None;
-static mut ELECTION_TIMER: Option<RwLock<RandomizedTimer>> = None;
+// static mut ELECTION_TIMER: Option<RwLock<RandomizedTimer>> = None;
 const LOWER_CEIL_MS: u64 = 150;
 const UPPER_CEIL_MS: u64 = 300;
 const HEARTBEAT_MS: u64 = 100;
@@ -152,12 +154,12 @@ async fn get_log_len () -> i32 {
     }
 }
 
-async fn reset_election_timer () {
-    unsafe {
-    let mut timer = ELECTION_TIMER.as_ref().unwrap().write().await;
-    timer.reset();
-    }
-}
+// async fn reset_election_timer () {
+//     unsafe {
+//     let mut timer = ELECTION_TIMER.as_ref().unwrap().write().await;
+//     timer.reset();
+//     }
+// }
 
 async fn reset_heartbeat_timer () {
     unsafe {
@@ -166,12 +168,12 @@ async fn reset_heartbeat_timer () {
     }
 }
 
-async fn is_election_timer_expired () -> bool {
-    unsafe {
-    let timer = ELECTION_TIMER.as_mut().unwrap().read().await;
-    timer.is_expired()
-    }
-}
+// async fn is_election_timer_expired () -> bool {
+//     unsafe {
+//     let timer = ELECTION_TIMER.as_mut().unwrap().read().await;
+//     timer.is_expired()
+//     }
+// }
 
 async fn is_heartbeat_timer_expired () -> bool {
     unsafe {
@@ -201,6 +203,11 @@ async fn get_channel(socket: SocketAddr) -> Option<RaftRpcClient<Channel>> {
     }
 }
 
+async fn get_random_duration() -> Duration {
+    let mut rng = rand::thread_rng();
+    let random = rng.gen_range(LOWER_CEIL_MS..UPPER_CEIL_MS);
+    Duration::from_millis(random)
+}
 
 async fn begin_request_voting() {
     // if config is <= 1, immediately become leader
@@ -224,6 +231,7 @@ async fn begin_request_voting() {
         vidw.insert(get_port() as i32);
         drop(vidw); // release lock
         let majoritytally = sockets.len() / 2;
+        let electdur = get_random_duration().await;
         for socket in sockets {
             if socket == SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), get_port()) {
                 continue;
@@ -232,11 +240,11 @@ async fn begin_request_voting() {
             tokio::spawn(async move {
                 let mut client = match  get_channel(socket).await {
                     Some(client) => {
-                        println!("Connected to {}", socket);
+                        // println!("Connected to {}", socket);
                         client
                     },
                     None => {
-                        println!("Failed to connect to {}", socket);
+                        // println!("Failed to connect to {}", socket);
                         return;
                     }
                 };
@@ -249,55 +257,60 @@ async fn begin_request_voting() {
                         candidate_address: format!("{}", SocketAddr::new(HOST, get_port()))
                     }
                 ); 
-                match client.request_vote(request).await {
-                    Ok(response) => {
-                        // if response.get_ref().vote_granted {
-                            // voted_ids_clone.lock().unwrap().insert(new_addr_clone[i].port() as i32);
-                            // print_status(format!("Received vote from {}", new_addr_clone[i]));
-                        // }
-                        if get_state().await == NodeState::Candidate && response.get_ref().term == get_current_term().await && response.get_ref().vote_granted {
-                            let mut vidcw = voted_ids_clone.write().await;
-                            vidcw.insert(socket.port() as i32);
-                            drop(vidcw);
-                            if voted_ids_clone.read().await.len() > majoritytally {
-                                change_state_to(NodeState::Leader, format!("Won election")).await;
-                                blast_heartbeat().await;
-                            } 
-                            print_status(format!("Received vote from {}", socket)).await;
-                        } else if response.get_ref().term > get_current_term().await {
-                            change_state_to(NodeState::Follower, format!("Received higher term from {}", socket)).await;
-                            set_leader_address(Some(socket)).await;
-                            reset_heartbeat_timer().await;
-                            set_current_term(response.get_ref().term).await;
-                            set_voted_for(None).await;
+                match tokio::time::timeout(electdur, client.request_vote(request)).await {
+                    Ok(rp) => {
+                        match rp {
+                            Ok(response) => {
+                                if get_state().await == NodeState::Candidate && response.get_ref().term == get_current_term().await && response.get_ref().vote_granted {
+                                    let mut vidcw = voted_ids_clone.write().await;
+                                    vidcw.insert(socket.port() as i32);
+                                    drop(vidcw);
+                                    if voted_ids_clone.read().await.len() > majoritytally {
+                                        change_state_to(NodeState::Leader, format!("Won election")).await;
+                                        blast_heartbeat().await;
+                                    } 
+                                    print_status(format!("Received vote from {}", socket)).await;
+                                } else if response.get_ref().term > get_current_term().await {
+                                    change_state_to(NodeState::Follower, format!("Received higher term from {}", socket)).await;
+                                    set_leader_address(Some(socket)).await;
+                                    reset_heartbeat_timer().await;
+                                    set_current_term(response.get_ref().term).await;
+                                    set_voted_for(None).await;
+                                }
+                            },
+                            Err(_) => {
+                                print_status(format!("Error receiving response from {}", socket)).await;
+                            }
                         }
-                    }
+                    },
                     Err(_) => {
                         print_status(format!("Error sending request to {}", socket)).await;
                     }
                 };
             });
         }
-        // timer
-        reset_election_timer().await;
+        let timekeep = Instant::now();
         loop {
-            if get_state().await != NodeState::Candidate {
+            if timekeep.elapsed().as_millis() > electdur.as_millis() {
+                print_status("No winner, resetting election").await;        
+                print_status(
+                    format!("Election ended with vote: {:?} at term: {}", voted_ids.read().await.iter().map(|x| x.to_string()).collect::<Vec<String>>(), get_current_term().await)
+                ).await;
+                set_current_term(get_current_term().await + 1).await;
+                set_voted_for(Some(get_port() as i32)).await;
                 break;
             }
-            if is_election_timer_expired().await {
-                break;
+            if get_state().await != NodeState::Candidate {
+                print_status(
+                    format!("Election ended with vote: {:?} at term: {}", voted_ids.read().await.iter().map(|x| x.to_string()).collect::<Vec<String>>(), get_current_term().await)
+                ).await;
+                return;
             }
         }
-        print_status("No winner, resetting election").await;        
-        print_status(
-            format!("Election ended with vote: {:?} at term: {}", voted_ids.read().await.iter().map(|x| x.to_string()).collect::<Vec<String>>(), get_current_term().await)
-        ).await;
-        set_current_term(get_current_term().await + 1).await;
-        set_voted_for(Some(get_port() as i32)).await;
 
     }
+}
     
-} 
 
 async fn blast_heartbeat() {
     if get_state().await != NodeState::Leader {
@@ -396,8 +409,6 @@ impl RaftRpc for RaftRpcImpl {
         &self,
         request: tonic::Request<RequestVoteRequest>,
     ) -> Result<tonic::Response<RequestVoteResponse>, tonic::Status> {
-        // println!("Request term: {} with ID: {}", request.get_ref().term, request.get_ref().candidate_id);
-        // println!("Current term: {}", get_current_term());
         print_status(format!("Received request vote from {} with Term: {} in my current Term: {}", 
         request.get_ref().candidate_id,
         request.get_ref().term,
@@ -485,20 +496,33 @@ impl RaftRpc for RaftRpcImpl {
                         Some(client) => client,
                         None => continue,
                     };
-                    // node addresses list from hashset to vector<string>
-                    let mut addresses: Vec<String> = Vec::new();
-                    for address in get_config().await.node_address_list.iter() {
-                        addresses.push(address.to_string());
-                    }
-                
-                    let request = tonic::Request::new(UpdateConfigRequest {
-                        addresses
-                    });
-
-                    match client.update_config(request).await {
-                        Ok(_) => {
+                    for _ in 0..3 {                    
+                        let mut addresses: Vec<String> = Vec::new();
+                        for address in get_config().await.node_address_list.iter() {
+                            addresses.push(address.to_string());
                         }
-                        Err(_) => {
+                        let request = tonic::Request::new(UpdateConfigRequest {
+                            addresses
+                        });
+                        match tokio::time::timeout(Duration::from_millis(500), client.update_config(request)).await {
+                            Ok(result) => {
+                                match result {
+                                    Ok(response) => {
+                                        if response.get_ref().success {
+                                            println!("Successfully updated config on {}", socket);
+                                            break;
+                                        } else {
+                                            println!("Failed to update config on {}, retrying...", socket);
+                                        }
+                                    }
+                                    Err(_) => {
+                                        println!("Failed to update config on {}, retrying...", socket);
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                println!("Failed to update config on {}, retrying...", socket);
+                            }
                         }
                     }
                 }
@@ -514,9 +538,19 @@ impl RaftRpc for RaftRpcImpl {
                 return Ok(tonic::Response::new(reply));
             } 
             let mut leader_client = get_channel(leader_socket.unwrap()).await.unwrap();
-            match leader_client.join(request).await {
+            match tokio::time::timeout(Duration::from_millis(2000), leader_client.join(request)).await {
                 Ok(reply) => {
-                    Ok(reply)
+                    match reply {
+                        Ok(response) => {
+                            return Ok(response);
+                        }
+                        Err(_) => {
+                            let reply = JoinResponse {
+                                success: false,
+                            };
+                            return Ok(tonic::Response::new(reply));
+                        }
+                    }
                 }
                 Err(_) => {
                     let reply = JoinResponse {
@@ -581,10 +615,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         HEARTBEAT_TIMER = Some(RwLock::new(RandomizedTimer::new(LOWER_CEIL_MS, UPPER_CEIL_MS)));
     }
-    // ELECTION TIMER
-    unsafe {
-        ELECTION_TIMER = Some(RwLock::new(RandomizedTimer::new(LOWER_CEIL_MS, UPPER_CEIL_MS)));
-    }
+
     // CONFIG
     load_config().await;
     
