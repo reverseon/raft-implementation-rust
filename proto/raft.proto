@@ -15,6 +15,8 @@ message AppendEntriesRequest {
 message AppendEntriesResponse {
     int32 term = 1;
     bool success = 2;
+    int32 lastAppliedIndex = 3;
+    string lastResult = 4;
 }
 
 message RequestVoteRequest {
@@ -52,6 +54,30 @@ message UpdateConfigResponse {
     bool success = 1;
 }
 
+message EnqueueRequest {
+    string content = 1;
+}
+
+message EnqueueResponse {
+    bool success = 1;
+}
+
+message DequeueRequest {
+}
+
+message DequeueResponse {
+    bool success = 1;
+    string content = 2;
+}
+
+message ReadQueueRequest {
+}
+
+message ReadQueueResponse {
+    bool success = 1;
+    repeated string contents = 2;
+}
+
 message Empty {
 }
 
@@ -61,6 +87,9 @@ service RaftRpc {
     rpc Heartbeat(AppendEntriesRequest) returns (Empty);
     rpc Join(JoinRequest) returns (JoinResponse);
     rpc UpdateConfig(UpdateConfigRequest) returns (UpdateConfigResponse);
+    rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+    rpc Dequeue(DequeueRequest) returns (DequeueResponse);
+    rpc ReadQueue(ReadQueueRequest) returns (ReadQueueResponse);
 }
 
 

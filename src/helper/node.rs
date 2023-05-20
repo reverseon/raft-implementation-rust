@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::rpc::raftrpc::LogEntry;
 use super::state::NodeState;
 use serde::ser::{
@@ -55,8 +57,8 @@ pub struct Node {
     pub log: Vec<LogEntry>,
     pub commit_index: i32,
     pub last_applied: i32,
-    pub next_index: Option<Vec<i32>>,
-    pub match_index: Option<Vec<i32>>,
+    pub next_index: HashMap<std::net::SocketAddr, i32>,
+    pub match_index: HashMap<std::net::SocketAddr, i32>,
     pub state: NodeState
 }
 
@@ -68,15 +70,15 @@ impl Node {
             current_term: 0,
             voted_for: None,
             log: Vec::new(),
-            commit_index: 0,
-            last_applied: 0,
-            next_index: None,
-            match_index: None,
+            commit_index: -1,
+            last_applied: -1,
+            next_index: HashMap::new(),
+            match_index: HashMap::new(),
             state: NodeState::Follower
         }
     }
     pub fn save_persistent_to_json(&self) {
-        let json_filename = format!("logs/node_{}.json", self.address);
+        let json_filename = format!("logs/node_{}.json", self.address.to_string().replace(":", "_"));
         let persistent = Persistent {
             current_term: self.current_term,
             voted_for: self.voted_for,
@@ -87,7 +89,7 @@ impl Node {
     }
 
     pub fn load_persistent_from_json(&mut self) {
-        let json_filename = format!("logs/node_{}.json", self.address);
+        let json_filename = format!("logs/node_{}.json", self.address.to_string().replace(":", "_"));
         let json_string = super::rw::read_file_create_file_and_dir_if_not_exist(json_filename.clone()); 
         if json_string == "" {
             // initialize
