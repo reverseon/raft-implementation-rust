@@ -28,15 +28,18 @@ function App() {
     const fetch = async () => {
       try {
         const { data } = await Axios.get(HTTP_INTERFACE);
+        // FIX: 24342 somehow gk ke write ke config
+        setLeader(
+          data.find((item: any) => item.state === 'Follower').leader_address
+        );
         setNodeInfo(data.filter((item: any) => item.state !== 'Leader'));
-        setLeader(data[0].leader_address);
       } catch (err) {
         console.log(err);
         setNodeInfo([]);
       }
     };
 
-    setInterval(fetch, 5000);
+    setInterval(fetch, 3000);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
