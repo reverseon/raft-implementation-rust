@@ -77,6 +77,19 @@ message ReadQueueResponse {
     repeated string contents = 2;
 }
 
+message StatusRequest {
+}
+
+message StatusResponse {
+    string state = 1;
+    int32 term = 2;
+    string leaderAddress = 3;
+    repeated LogEntry log = 4;
+    int32 commitIndex = 5;
+    int32 lastAppliedIndex = 6;
+    repeated string queue = 7; 
+}
+
 message Empty {
 }
 
@@ -89,6 +102,7 @@ service RaftRpc {
     rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
     rpc Dequeue(DequeueRequest) returns (DequeueResponse);
     rpc ReadQueue(ReadQueueRequest) returns (ReadQueueResponse);
+    rpc Status(StatusRequest) returns (StatusResponse);
 }
 
 

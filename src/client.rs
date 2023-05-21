@@ -18,6 +18,26 @@ use std::net::SocketAddr;
 
 use rand::prelude::SliceRandom;
 
+async fn get_connection(mut sockets: Vec<SocketAddr>) -> Result<RaftRpcClient<Channel>, Status> {
+    // randomize sockets
+    sockets.shuffle(&mut rand::thread_rng());
+    let mut client: Option<RaftRpcClient<Channel>> = None;
+    for socket in sockets {
+        match RaftRpcClient::connect(format!("http://{}", socket)).await {
+            Ok(client_socket) => {
+                println!("Connected to {}", socket);
+                client = Some(client_socket);
+                break;
+            }
+            Err(_) => continue,
+        };
+    }
+    if client.is_none() {
+        return Err(Status::new(tonic::Code::Unavailable, "No node available"));
+    }
+    Ok(client.unwrap())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("-----------------------------");
@@ -34,25 +54,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for socket in &sockets {
         println!("{}", socket);
     }
-    // randomize sockets
-    sockets.shuffle(&mut rand::thread_rng());
+
     println!("----------------------------");
     println!("Connecting...");
-    for socket in &sockets {
-        match RaftRpcClient::connect(format!("http://{}", socket)).await {
-            Ok(client_socket) => {
-                println!("Client connected to {}", socket);
-                client = Some(client_socket);
-                break;
-            }
-            Err(_) => continue,
-        };
-    }
+    client = match get_connection(sockets.clone()).await {
+        Ok(client) => Some(client),
+        Err(_) => None,
+    }; 
     if client.is_none() {
         println!("Client failed to connect to any node");
         return Ok(());
     }
     loop {
+        if client.is_none() {
+            println!("----------------------------");
+            println!("Reconnecting...");
+            client = match get_connection(sockets.clone()).await {
+                Ok(client) => Some(client),
+                Err(_) => None,
+            }; 
+            if client.is_none() {
+                println!("Client failed to connect to any node");
+                return Ok(());
+            }
+        }
         println!("----------------------------");
         println!("Available Commands");
         println!("----------------------------");
@@ -100,7 +125,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(_) => {
-                        println!("Error sending request!");
+                        // retry sending request again
+                        println!("Error sending request! connecting to another node...");
+                        client = match get_connection(sockets.clone()).await {
+                            Ok(client) => Some(client),
+                            Err(_) => None,
+                        };
                     }
                 };
             }
@@ -123,7 +153,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(_) => {
-                        println!("Error sending request!");
+                        println!("Error sending request! connecting to another node...");
+                        client = match get_connection(sockets.clone()).await {
+                            Ok(client) => Some(client),
+                            Err(_) => None,
+                        };
                     }
                 };
             }
@@ -156,7 +190,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(_) => {
-                        println!("Error sending request!");
+                        println!("Error sending request! connecting to another node...");
+                        client = match get_connection(sockets.clone()).await {
+                            Ok(client) => Some(client),
+                            Err(_) => None,
+                        };
                     }
                 };
 

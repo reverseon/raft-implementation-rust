@@ -29,6 +29,7 @@ use helper::rpc::raftrpc::{
     EnqueueRequest, EnqueueResponse,
     DequeueRequest, DequeueResponse,
     ReadQueueRequest, ReadQueueResponse,
+    StatusRequest, StatusResponse,
 };
 use helper::rpc::raftrpc::raft_rpc_client::RaftRpcClient;
 use tonic::{transport::{Server, Channel, Endpoint}, Request, Response, Status};
@@ -1063,6 +1064,25 @@ impl RaftRpc for RaftRpcImpl {
                 contents: peek_all_queue().await
             })
         ) 
+    }
+    async fn status(
+        &self,
+        request: tonic::Request<StatusRequest>,
+    ) -> Result<tonic::Response<StatusResponse>, tonic::Status> {
+        print_status("Got a status request").await;
+        let reply = StatusResponse {
+            state : get_state().await.get_state().to_string(),
+            term : get_current_term().await,
+            leader_address : match get_leader_address().await {
+                Some(socket) => socket.to_string(),
+                None => "".to_string(),
+            },
+            log : get_log_entries().await,
+            commit_index : get_commit_index().await,
+            last_applied_index : get_last_applied().await,
+            queue : peek_all_queue().await,
+        };
+        Ok(tonic::Response::new(reply))
     }
 }
 
