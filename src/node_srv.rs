@@ -10,7 +10,7 @@ use std::sync::{Arc};
 use tokio::sync::{RwLock};
 use tonic::codegen::http::response;
 use std::time::{Instant, Duration};
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashSet, HashMap, VecDeque};
 use rand::Rng;
 
 
@@ -132,22 +132,25 @@ async fn get_log_entry (index: usize) -> LogEntry {
 
 async fn set_log_entry (index: usize, entry: LogEntry) {
     unsafe {
-        NODE_INSTANCE.as_mut().unwrap().write().await.log[index] = entry;
-        NODE_INSTANCE.as_mut().unwrap().write().await.save_persistent_to_json();
+        let mut locknode = NODE_INSTANCE.as_mut().unwrap().write().await;
+        locknode.log[index] = entry;
+        locknode.save_persistent_to_json();
     }
 }
 
 async fn append_to_log (entry: LogEntry) {
     unsafe {
-        NODE_INSTANCE.as_mut().unwrap().write().await.log.push(entry);
-        NODE_INSTANCE.as_mut().unwrap().write().await.save_persistent_to_json();
+        let mut locknode = NODE_INSTANCE.as_mut().unwrap().write().await;
+        locknode.log.push(entry); 
+        locknode.save_persistent_to_json();
     }
 }
 
 async fn set_log_entries (entries: Vec<LogEntry>) {
     unsafe {
-        NODE_INSTANCE.as_mut().unwrap().write().await.log = entries;
-        NODE_INSTANCE.as_mut().unwrap().write().await.save_persistent_to_json();
+        let mut locknode = NODE_INSTANCE.as_mut().unwrap().write().await;
+        locknode.log = entries;
+        locknode.save_persistent_to_json();
     }
 }
 
@@ -422,6 +425,7 @@ async fn do_append_entries(prev_log_index: i32, leader_commit_index: i32, to_app
                 let mut nodeinstlock = NODE_INSTANCE.as_mut().unwrap().write().await;
                 nodeinstlock.log.truncate((prev_log_index+1) as usize);
                 nodeinstlock.save_persistent_to_json();
+                drop(nodeinstlock);
             }
         }
     }
@@ -503,7 +507,10 @@ async fn begin_request_voting() {
                                     let mut vidcw = voted_ids_clone.write().await;
                                     vidcw.insert(socket.port() as i32);
                                     drop(vidcw);
-                                    if voted_ids_clone.read().await.len() > majoritytally {
+                                    let votedidlock = voted_ids_clone.read().await;
+                                    let votedidlen = votedidlock.len();
+                                    drop(votedidlock);
+                                    if votedidlen > majoritytally {
                                         for socket in get_sockets_from_config().await {
                                             if socket == SocketAddr::new(HOST, get_port()) {
                                                 continue;
@@ -537,13 +544,19 @@ async fn begin_request_voting() {
             // wait for all threads to finish
         }
         if get_state().await != NodeState::Candidate {
+            let voted_ids_lock = voted_ids.read().await;
+            let printedval = voted_ids_lock.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+            drop(voted_ids_lock);
             print_status(
-                format!("Election ended with vote: {:?} at term: {}", voted_ids.read().await.iter().map(|x| x.to_string()).collect::<Vec<String>>(), get_current_term().await)
+                format!("Election ended with vote: {:?} at term: {}", printedval, get_current_term().await)
             ).await;
-        } else /* if timekeep.elapsed().as_millis() > electdur.as_millis() */ {
+        } else /* if timekeep.elapsed().as_millis() > electdur.as_millis() */ {            
+            let voted_ids_lock = voted_ids.read().await;
+            let printedval = voted_ids_lock.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+            drop(voted_ids_lock);
             print_status("No winner, resetting election").await;        
             print_status(
-                format!("Election ended with vote: {:?} at term: {}", voted_ids.read().await.iter().map(|x| x.to_string()).collect::<Vec<String>>(), get_current_term().await)
+                format!("Election ended with vote: {:?} at term: {}", printedval, get_current_term().await)
             ).await;
             set_current_term(get_current_term().await + 1).await;
             set_voted_for(Some(get_port() as i32)).await;
@@ -672,6 +685,12 @@ async fn craft_append_entries_request(dest: SocketAddr) -> Request<AppendEntries
                 leader_address: format!("{}", SocketAddr::new(HOST, get_port())),
             }
         )
+    }
+}
+
+async fn peek_all_queue() -> Vec<String> {
+    unsafe {
+        STATE_MACHINE.as_ref().unwrap().read().await.peekall_log()
     }
 }
 
@@ -1041,9 +1060,7 @@ impl RaftRpc for RaftRpcImpl {
         Ok(
             tonic::Response::new(ReadQueueResponse {
                 success: true,
-                contents: unsafe {
-                    STATE_MACHINE.as_ref().unwrap().read().await.peekall_log()  
-                }
+                contents: peek_all_queue().await
             })
         ) 
     }
@@ -1145,9 +1162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     mainthreadset.spawn(
         async {
             loop {
-                let queuelog = unsafe {
-                    STATE_MACHINE.as_ref().unwrap().read().await.peekall_log()
-                };
+                let queuelog = peek_all_queue().await;
                 // construct string like [1, 2, 3, 4]
                 let mut queuelogstr = String::from("[");
                 for i in 0..queuelog.len() {
@@ -1167,10 +1182,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             match get_state().await {
                 NodeState::Follower => {
                 if is_heartbeat_timer_expired().await {
-                        unsafe {
-                            // for debug
-                            print_status(format!("Time: {} ms", HEARTBEAT_TIMER.as_ref().unwrap().read().await.get_duration().as_millis())).await;
-                        }
                         set_current_term(get_current_term().await + 1).await;
                         change_state_to(NodeState::Candidate, "Heartbeat timeout").await;
                         set_voted_for(Some(get_port() as i32)).await;
