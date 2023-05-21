@@ -2,7 +2,7 @@ pub mod helper;
 
 use std::net::SocketAddr;
 
-use actix_web::{get, App, HttpResponse, HttpServer, Responder};
+use actix_web::{get, App, HttpResponse, HttpServer, Responder, http::header};
 use helper::rpc::raftrpc::{
     LogEntry,
     StatusRequest, StatusResponse,
@@ -81,7 +81,11 @@ async fn status() -> impl Responder {
         };
         responses.push(response);
     }
-    HttpResponse::Ok().json(responses)
+    HttpResponse::Ok()
+        .append_header((header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"))
+        .append_header((header::ACCESS_CONTROL_ALLOW_METHODS, "GET"))
+        .append_header((header::ACCESS_CONTROL_ALLOW_HEADERS, "content-type"))
+        .json(responses)
 }
 
 #[actix_web::main]
