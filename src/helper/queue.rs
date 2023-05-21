@@ -1,20 +1,22 @@
+use std::collections::VecDeque;
+
 use super::rpc::raftrpc::LogEntry;
 
 pub struct Queue {
-    pub queue: Vec<String>,
+    pub queue: VecDeque<String>,
 }
 
 impl Queue {
     pub fn new() -> Self {
-        Queue { queue: Vec::new() }
+        Queue { queue: VecDeque::new() }
     }
 
     fn enqueue(&mut self, item: String) {
-        self.queue.push(item);
+        self.queue.push_back(item);
     }
 
     fn dequeue(&mut self) -> Option<String> {
-        self.queue.pop()
+        self.queue.pop_front()
     }
 
     pub fn len(&self) -> usize {
@@ -45,6 +47,7 @@ impl Queue {
     }
 
     pub fn execute(&mut self, cmd: String) -> String {
+        println!("EXECUTING: {}", cmd);
         let mut result: String = String::new();
         if cmd.starts_with("ENQUEUE") {
             let item: String = cmd.split(" ").collect::<Vec<&str>>()[1].to_string();

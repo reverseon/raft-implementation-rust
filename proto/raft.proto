@@ -16,7 +16,6 @@ message AppendEntriesResponse {
     int32 term = 1;
     bool success = 2;
     int32 lastAppliedIndex = 3;
-    string lastResult = 4;
 }
 
 message RequestVoteRequest {

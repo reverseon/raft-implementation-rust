@@ -133,18 +133,21 @@ async fn get_log_entry (index: usize) -> LogEntry {
 async fn set_log_entry (index: usize, entry: LogEntry) {
     unsafe {
         NODE_INSTANCE.as_mut().unwrap().write().await.log[index] = entry;
+        NODE_INSTANCE.as_mut().unwrap().write().await.save_persistent_to_json();
     }
 }
 
 async fn append_to_log (entry: LogEntry) {
     unsafe {
         NODE_INSTANCE.as_mut().unwrap().write().await.log.push(entry);
+        NODE_INSTANCE.as_mut().unwrap().write().await.save_persistent_to_json();
     }
 }
 
 async fn set_log_entries (entries: Vec<LogEntry>) {
     unsafe {
         NODE_INSTANCE.as_mut().unwrap().write().await.log = entries;
+        NODE_INSTANCE.as_mut().unwrap().write().await.save_persistent_to_json();
     }
 }
 
@@ -227,9 +230,21 @@ async fn get_match_index (socket: SocketAddr) -> i32 {
     }
 }
 
+async fn is_match_index_existed (socket: SocketAddr) -> bool {
+    unsafe {
+        NODE_INSTANCE.as_ref().unwrap().read().await.match_index.contains_key(&socket)
+    }
+}
+
 async fn get_next_index (socket: SocketAddr) -> i32 {
     unsafe {
         NODE_INSTANCE.as_ref().unwrap().read().await.next_index.get(&socket).unwrap().clone()
+    }
+}
+
+async fn is_next_index_existed (socket: SocketAddr) -> bool {
+    unsafe {
+        NODE_INSTANCE.as_ref().unwrap().read().await.next_index.contains_key(&socket)
     }
 }
 
@@ -293,9 +308,13 @@ async fn get_random_duration() -> Duration {
 }
 
 async fn acks(length: i32) -> i32 {
-    let mut counter = 0;
+    let mut counter = 1;
     for socket in get_sockets_from_config().await {
-        if get_match_index(socket).await + 1 >= length {
+        // println!("checking ack from {}", socket.to_string());
+        if socket == SocketAddr::new(HOST, get_port()) {
+            continue;
+        } else if get_match_index(socket).await + 1 >= length {
+            // println!("ack from {}", socket.to_string());
             counter += 1;
         }
     }
@@ -307,13 +326,11 @@ async fn replicate_log_to_all_followers() ->  String {
     if get_state().await != NodeState::Leader {
         return "Not leader".to_string();
     }
-    let last_result_out = Arc::new(RwLock::new("".to_string()));
     let mut threadset = tokio::task::JoinSet::new();
     for socket in get_sockets_from_config().await {
         if socket == SocketAddr::new(HOST, get_port()) {
             continue;
         }
-        let lro_clone = Arc::clone(&last_result_out);
         threadset.spawn( async move {
             let mut channel = match get_channel(socket).await {
                 Some(channel) => channel,
@@ -323,31 +340,19 @@ async fn replicate_log_to_all_followers() ->  String {
             };
             loop { 
                 let req = craft_append_entries_request(socket).await;
+                // println!("request: {:?}", req.get_ref());
+                // println!("socket: {}", socket.to_string());
                 match channel.append_entries(req).await {
                     Ok(response) => {
                         let response = response.into_inner();
                         let success = response.success;
                         let term = response.term;
                         let last_applied_index = response.last_applied_index;
-                        let last_result = response.last_result;
-                        let mut lro_clone_lock = lro_clone.write().await;
-                        *lro_clone_lock = last_result;
-                        if term > get_current_term().await && get_state().await == NodeState::Leader {
+                        if term == get_current_term().await && get_state().await == NodeState::Leader {
                             if success && last_applied_index > get_match_index(socket).await {
                                 set_match_index(socket, last_applied_index).await;
                                 set_next_index(socket, last_applied_index+1).await;
-                                // CommitLogEntries
-                                let majoritytally = get_sockets_from_config().await.len() / 2;
-                                let mut readyvec = Vec::new();
-                                for len in 1..get_log_len().await+1 {
-                                    if acks(len).await > majoritytally as i32 {
-                                        readyvec.push(len);
-                                    }
-                                }
-                                let maxrvec = *(readyvec.iter().max().unwrap());
-                                if readyvec.len() > 0 && maxrvec > get_commit_index().await + 1 && get_log_entry(maxrvec as usize - 1).await.term == get_current_term().await {
-                                    set_commit_index(maxrvec - 1).await;
-                                }
+                                
                                 return;
                             } else if get_next_index(socket).await > 0 {
                                 set_next_index(socket, get_next_index(socket).await-1).await;
@@ -366,25 +371,53 @@ async fn replicate_log_to_all_followers() ->  String {
                         }
                     }
                     Err(_) => {
-                        return ;
+                        return;
                     }
                 }
             }
+            
         });
     }
     while let Some(_) = threadset.join_next().await {}
-    return last_result_out.read().await.clone();
+    // CommitLogEntries
+    let majoritytally = get_sockets_from_config().await.len() / 2;
+    let mut readyvec = Vec::new();
+    // println!("");
+    for len in 1..get_log_len().await+1 {
+        // println!("checking acks for {}", len);
+        if acks(len).await > majoritytally as i32 {
+            // println!("up to {} committed", len);
+            readyvec.push(len);
+        }
+    }
+    // println!("");
+    let mut last_result = "No new entries to commit".to_string();
+    if readyvec.len() > 0 {
+        let maxrvec = *(readyvec.iter().max().unwrap());
+        // println!("log term: {}", get_log_entry(maxrvec as usize - 1).await.term);
+        // println!("current term: {}", get_current_term().await);
+        if maxrvec > get_commit_index().await + 1 && get_log_entry(maxrvec as usize - 1).await.term <= get_current_term().await {
+            for i in get_commit_index().await+1..maxrvec {
+                let command = get_log_entry(i as usize).await.command.clone();
+                last_result = apply_command_to_state_machine(command).await;
+            }
+            set_commit_index(maxrvec - 1).await;
+        }
+    }
+    return last_result;
 }
 
-async fn do_append_entries(prev_log_index: i32, leader_commit_index: i32, to_append: Vec<LogEntry>) -> Option<String> {
-    let mut result = None;
+async fn do_append_entries(prev_log_index: i32, leader_commit_index: i32, to_append: Vec<LogEntry>) {
+    // println!("");
+    // println!("Append entries with prev_log_index: {}, leader_commit_index: {}, my_commit_index: {}, to_append: {:?}", prev_log_index, leader_commit_index, get_commit_index().await, to_append);
+    // println!("");
     let to_append_len: i32 = to_append.len() as i32;
     if to_append_len > 0 && get_log_len().await > prev_log_index+1 {
         let index: usize = (min(
             get_log_len().await,
             prev_log_index+1+to_append_len
         ) - 1) as usize;
-        if get_log_entry(index).await.term != to_append[index-(prev_log_index as usize)-1].term {
+        if get_log_entry(index).await.term != to_append[((index as i32)-prev_log_index-1) as usize].term {
             unsafe {
                 let mut nodeinstlock = NODE_INSTANCE.as_mut().unwrap().write().await;
                 nodeinstlock.log.truncate((prev_log_index+1) as usize);
@@ -398,19 +431,17 @@ async fn do_append_entries(prev_log_index: i32, leader_commit_index: i32, to_app
         }
     }
     if leader_commit_index > get_commit_index().await {
-        for i in get_commit_index().await+1..leader_commit_index {
-            result = Some(apply_command_to_state_machine(get_log_entry(i as usize).await.command.clone()).await); 
+        for i in get_commit_index().await+1..leader_commit_index+1 {
+            apply_command_to_state_machine(get_log_entry(i as usize).await.command.clone()).await; 
         }
         set_commit_index(leader_commit_index).await;
     }
-    result
 }
 
 
 async fn begin_request_voting() {
     // if config is <= 1, immediately become leader
     if get_config().await.node_address_list.len() <= 1 {
-        change_state_to(NodeState::Leader, format!("Won election")).await;
         for socket in get_sockets_from_config().await {
             if socket == SocketAddr::new(HOST, get_port()) {
                 continue;
@@ -418,6 +449,7 @@ async fn begin_request_voting() {
             set_next_index(socket, get_log_len().await).await;
             set_match_index(socket, -1).await;
         }
+        change_state_to(NodeState::Leader, format!("Won election")).await;
         return;
     }
     // update_client_pool().await;
@@ -472,7 +504,6 @@ async fn begin_request_voting() {
                                     vidcw.insert(socket.port() as i32);
                                     drop(vidcw);
                                     if voted_ids_clone.read().await.len() > majoritytally {
-                                        change_state_to(NodeState::Leader, format!("Won election")).await;
                                         for socket in get_sockets_from_config().await {
                                             if socket == SocketAddr::new(HOST, get_port()) {
                                                 continue;
@@ -480,6 +511,7 @@ async fn begin_request_voting() {
                                             set_next_index(socket, get_log_len().await).await;
                                             set_match_index(socket, -1).await;
                                         }
+                                        change_state_to(NodeState::Leader, format!("Won election")).await;
                                     } 
                                     print_status(format!("Received vote from {}", socket)).await;
                                 } else if response.get_ref().term > get_current_term().await {
@@ -658,7 +690,7 @@ impl RaftRpc for RaftRpcImpl {
         let req_prev_log_index = request.get_ref().prev_log_index;
         let req_prev_log_term = request.get_ref().prev_log_term;
         let req_entries = request.get_ref().clone().entries;
-        // let req_leader_commit = request.get_ref().leader_commit;
+        let req_leader_commit = request.get_ref().leader_commit;
         let req_leader_address = request.get_ref().clone().leader_address;
         if req_term > get_current_term().await {
             set_current_term(req_term).await;
@@ -672,20 +704,17 @@ impl RaftRpc for RaftRpcImpl {
             set_leader_address(Some(req_leader_address.parse().unwrap())).await;
             reset_heartbeat_timer().await;
         }
-        let logvalid = get_log_len().await > req_prev_log_index + 1 && 
+        let logvalid = get_log_len().await >= req_prev_log_index + 1 && 
         (req_prev_log_index == -1 || get_log_entry(req_prev_log_index.try_into().unwrap()).await.term == req_prev_log_term);
         if req_term == get_current_term().await && logvalid {
-            let lastcmdresult = match do_append_entries(req_prev_log_index, get_commit_index().await, req_entries.clone()).await {
-                None => "".to_string(),
-                Some(result) => result
-            };
+            do_append_entries(req_prev_log_index, req_leader_commit, req_entries.clone()).await;
             set_last_applied(req_prev_log_index /* + 1 */ + req_entries.len() as i32 /* -1 */).await; 
+            // println!("Last applied: {}", get_last_applied().await);
             return Ok(Response::new(
                 AppendEntriesResponse {
                     term: get_current_term().await,
                     success: true,
                     last_applied_index: get_last_applied().await,
-                    last_result: lastcmdresult 
                 }
             ));
 
@@ -695,7 +724,6 @@ impl RaftRpc for RaftRpcImpl {
                     term: get_current_term().await,
                     success: false,
                     last_applied_index: 0,
-                    last_result: "".to_string()
                 }
             ));
         }
@@ -780,7 +808,12 @@ impl RaftRpc for RaftRpcImpl {
             if !is_in_config(socket).await {
                 insert_to_config(socket).await;
                 save_config().await;
+
+            }
+            if !is_match_index_existed(socket).await {          
                 set_match_index(socket, -1).await;
+            }
+            if !is_next_index_existed(socket).await {
                 set_next_index(socket, get_log_len().await).await;
             }
             let reply = JoinResponse {
@@ -895,17 +928,18 @@ impl RaftRpc for RaftRpcImpl {
         &self,
         request: tonic::Request<EnqueueRequest>,
     ) -> Result<tonic::Response<EnqueueResponse>, tonic::Status> {
+        print_status(format!("Got a enqueue request: {}", request.get_ref().content)).await;
         if get_state().await == NodeState::Leader {
             let content = request.get_ref().content.clone();
             append_to_log(
                 LogEntry {
                     term: get_current_term().await,
                     command: "ENQUEUE ".to_string() + &content,
-                    index: get_last_log_index().await + 1,
+                    index: get_log_len().await,
                 }
             ).await;
             set_match_index(SocketAddr::new(HOST, get_port()), get_last_log_index().await).await;
-            let res = replicate_log_to_all_followers().await; 
+            replicate_log_to_all_followers().await; 
             let reply = EnqueueResponse {
                 success: true,
             };
@@ -947,12 +981,13 @@ impl RaftRpc for RaftRpcImpl {
         &self,
         request: tonic::Request<DequeueRequest>,
     ) -> Result<tonic::Response<DequeueResponse>, tonic::Status> {
+        print_status("Got a dequeue request").await;
         if get_state().await == NodeState::Leader {
             append_to_log(
                 LogEntry {
                     term: get_current_term().await,
                     command: "DEQUEUE".to_string(),
-                    index: get_last_log_index().await + 1,
+                    index: get_log_len().await,
                 }
             ).await;
             set_match_index(SocketAddr::new(HOST, get_port()), get_last_log_index().await).await;
@@ -1002,6 +1037,7 @@ impl RaftRpc for RaftRpcImpl {
         &self,
         request: tonic::Request<ReadQueueRequest>,
     ) -> Result<tonic::Response<ReadQueueResponse>, tonic::Status> {
+        print_status("Got a read queue request").await;
         Ok(
             tonic::Response::new(ReadQueueResponse {
                 success: true,
@@ -1084,7 +1120,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         // if no node in config, insert self to config
-        print_status("No node or only self in config, inserting self to config").await;
+        print_status("No nod, inserting self to config").await;
         insert_to_config(addr).await;
         save_config().await;
     }
@@ -1109,7 +1145,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     mainthreadset.spawn(
         async {
             loop {
-                print_status("Status").await;
+                let queuelog = unsafe {
+                    STATE_MACHINE.as_ref().unwrap().read().await.peekall_log()
+                };
+                // construct string like [1, 2, 3, 4]
+                let mut queuelogstr = String::from("[");
+                for i in 0..queuelog.len() {
+                    queuelogstr.push_str(&queuelog[i].to_string());
+                    if i != queuelog.len() - 1 {
+                        queuelogstr.push_str(",");
+                    }
+                }
+                queuelogstr.push_str("]");
+                print_status(format!("Queue: {}", queuelogstr)).await;
                 tokio::time::sleep(Duration::from_millis(5000)).await;
             }
         }
@@ -1134,7 +1182,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 NodeState::Leader => {
                     // blast heartbeat to all nodes every 100ms
-                    print_status("sending heartbeat...").await;
                     replicate_log_to_all_followers().await;
                     tokio::time::sleep(Duration::from_millis(HEARTBEAT_MS)).await;
                 }
