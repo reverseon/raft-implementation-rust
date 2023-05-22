@@ -14,6 +14,13 @@ Raft Node Server:
 - `./target/release/raft-node-server [PORT]`
   - e.g. `./target/release/raft-node-server 24341`
 
+Command ini saat pertama kali dijalankan akan membuat dua folder yaitu:
+- `cfg` yang berisikan file `config.json` yang menyimpan address dari node di cluster raft
+  - setiap node yang baru dijalankan otomatis akan masuk ke file ini. Namun jika node dihentikan, tidak akan langsung dihapus.
+- `logs` berisikan persistent data dari setiap node.
+
+Jika kedua folder ini tidak kosong, maka cluster akan melanjutkan dari data yang ada pada folder tersebut.
+
 Raft Client
 - `./target/release/raft-client`
 
