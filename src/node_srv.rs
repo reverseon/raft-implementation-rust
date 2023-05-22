@@ -42,9 +42,9 @@ static mut NODE_INSTANCE: Option<RwLock<Node>> = None;
 static mut HEARTBEAT_TIMER: Option<RwLock<RandomizedTimer>> = None;
 static mut STATE_MACHINE: Option<RwLock<helper::queue::Queue>> = None;
 // static mut ELECTION_TIMER: Option<RwLock<RandomizedTimer>> = None;
-const LOWER_CEIL_MS: u64 = 150;
-const UPPER_CEIL_MS: u64 = 300;
-const HEARTBEAT_MS: u64 = 100;
+const LOWER_CEIL_MS: u64 = 15000;
+const UPPER_CEIL_MS: u64 = 30000;
+const HEARTBEAT_MS: u64 = 1000;
 
 
 // HELPER FUNCTION THAT NEEDS DIRECT REFERENCE
@@ -285,6 +285,13 @@ async fn set_commit_index (index: i32) {
     }
 }
 
+async fn set_config(config: Config) {
+    unsafe {
+        let mut configlock = CONFIG.as_mut().unwrap().write().await;
+        *configlock = config;
+    }
+}
+
 async fn apply_command_to_state_machine (command: String) -> String {
     unsafe {
         STATE_MACHINE.as_mut().unwrap().write().await.execute(command)
@@ -292,7 +299,7 @@ async fn apply_command_to_state_machine (command: String) -> String {
 }
 
 async fn get_channel(socket: SocketAddr) -> Option<RaftRpcClient<Channel>> {
-    match tokio::time::timeout(Duration::from_millis(HEARTBEAT_MS/5), 
+    match tokio::time::timeout(Duration::from_millis(LOWER_CEIL_MS), 
         RaftRpcClient::connect(format!("http://{}", socket.to_string()))
     ).await {
         Ok(channel) => {
@@ -302,6 +309,34 @@ async fn get_channel(socket: SocketAddr) -> Option<RaftRpcClient<Channel>> {
             }
         }
         Err(_) => None
+    }
+}
+
+async fn get_channel_with_timeout(socket: SocketAddr, timeout: Duration) -> Option<RaftRpcClient<Channel>> {
+    match tokio::time::timeout(timeout, 
+        RaftRpcClient::connect(format!("http://{}", socket.to_string()))
+    ).await {
+        Ok(channel) => {
+            match channel {
+                Ok(channel) => Some(channel),
+                Err(_) => None
+            }
+        }
+        Err(_) => None
+    }
+}
+
+async fn get_channel_with_default_timeout(socket: SocketAddr) -> Option<RaftRpcClient<Channel>> {
+    match RaftRpcClient::connect(format!("http://{}", socket.to_string())).await {
+        Ok(channel) => Some(channel),
+        Err(_) => None
+    }
+}
+
+async fn remove_from_config(socket: SocketAddr) {
+    unsafe {
+        let mut configlock = CONFIG.as_mut().unwrap().write().await;
+        configlock.node_address_list.retain(|&x| x != socket);
     }
 }
 
@@ -336,7 +371,7 @@ async fn replicate_log_to_all_followers() ->  String {
             continue;
         }
         threadset.spawn( async move {
-            let mut channel = match get_channel(socket).await {
+            let mut channel = match get_channel_with_timeout(socket, Duration::from_millis(LOWER_CEIL_MS)).await {
                 Some(channel) => channel,
                 None => {
                     return;
@@ -717,7 +752,7 @@ impl RaftRpc for RaftRpcImpl {
             set_voted_for(None).await;
         }
         if req_term == get_current_term().await {
-            // println!("Got a valid append entries request from {}", req_leader_address);
+            print_status(format!("Got a valid heartbeat from {}", req_leader_address)).await;
             if get_state().await != NodeState::Follower {
                 change_state_to(NodeState::Follower, "got valid append entries request").await;
             }
@@ -827,8 +862,6 @@ impl RaftRpc for RaftRpcImpl {
         if get_state().await == NodeState::Leader {
             if !is_in_config(socket).await {
                 insert_to_config(socket).await;
-                save_config().await;
-
             }
             if !is_match_index_existed(socket).await {          
                 set_match_index(socket, -1).await;
@@ -836,17 +869,16 @@ impl RaftRpc for RaftRpcImpl {
             if !is_next_index_existed(socket).await {
                 set_next_index(socket, get_log_len().await).await;
             }
-            let reply = JoinResponse {
-                success: true,
-            };
+            let mut success_broadcast_to_all_nodes = true;
             // broadcast to all nodes except self to update
             let sockets = get_sockets_from_config().await;
             for socket in sockets {
                 if socket != SocketAddr::new(HOST, get_port()) {
-                    let mut client = match get_channel(socket).await {
+                    let mut client = match get_channel_with_default_timeout(socket).await {
                         Some(client) => client,
                         None => continue,
                     };
+                    let mut success_broadcast = false;                        
                     for _ in 0..3 {                    
                         let mut addresses: Vec<String> = Vec::new();
                         for address in get_config().await.node_address_list.iter() {
@@ -855,12 +887,13 @@ impl RaftRpc for RaftRpcImpl {
                         let request = tonic::Request::new(UpdateConfigRequest {
                             addresses
                         });
-                        match tokio::time::timeout(Duration::from_millis(500), client.update_config(request)).await {
+                        match tokio::time::timeout(Duration::from_millis(LOWER_CEIL_MS), client.update_config(request)).await {
                             Ok(result) => {
                                 match result {
                                     Ok(response) => {
                                         if response.get_ref().success {
                                             println!("Successfully updated config on {}", socket);
+                                            success_broadcast = true;
                                             break;
                                         } else {
                                             println!("Failed to update config on {}, retrying...", socket);
@@ -876,8 +909,18 @@ impl RaftRpc for RaftRpcImpl {
                             }
                         }
                     }
+                    if !success_broadcast {
+                        success_broadcast_to_all_nodes = false;
+                        // remove from config if failed to update
+                        remove_from_config(socket).await;
+                        break;
+                    }
                 }
             }
+            save_config().await;
+            let reply = JoinResponse {
+                success: success_broadcast_to_all_nodes,
+            };
             Ok(tonic::Response::new(reply))
         } else {
             // redirect to leader
@@ -888,8 +931,8 @@ impl RaftRpc for RaftRpcImpl {
                 };
                 return Ok(tonic::Response::new(reply));
             } 
-            let mut leader_client = get_channel(leader_socket.unwrap()).await.unwrap();
-            match tokio::time::timeout(Duration::from_millis(2000), leader_client.join(request)).await {
+            let mut leader_client = get_channel_with_default_timeout(leader_socket.unwrap()).await.unwrap();
+            match tokio::time::timeout(Duration::from_millis(UPPER_CEIL_MS), leader_client.join(request)).await {
                 Ok(reply) => {
                     match reply {
                         Ok(response) => {
@@ -920,17 +963,14 @@ impl RaftRpc for RaftRpcImpl {
         if !(get_state().await == NodeState::Leader) {
             let addresses = request.get_ref().addresses.clone();
             // convert to sockets
-            let mut sockets = Vec::new();
+            let mut sockets = HashSet::new();
             for address in addresses {
                 let socket: SocketAddr = address.parse().unwrap();
-                sockets.push(socket);
+                sockets.insert(socket);
             }
-            // insert to config
-            for socket in sockets {
-                insert_to_config(socket).await;
-            }
-
-            // send ok
+            let mut config = Config::new();
+            config.node_address_list = sockets;
+            set_config(config).await;
             Ok(
                 tonic::Response::new(UpdateConfigResponse {
                     success: true,
@@ -973,8 +1013,8 @@ impl RaftRpc for RaftRpcImpl {
                 };
                 return Ok(tonic::Response::new(reply));
             }
-            let mut leader_client = get_channel(leader_socket.unwrap()).await.unwrap();
-            match tokio::time::timeout(Duration::from_millis(2000), leader_client.enqueue(request)).await {
+            let mut leader_client = get_channel_with_default_timeout(leader_socket.unwrap()).await.unwrap();
+            match tokio::time::timeout(Duration::from_millis(UPPER_CEIL_MS), leader_client.enqueue(request)).await {
                 Ok(reply) => {
                     match reply {
                         Ok(response) => {
@@ -1027,8 +1067,8 @@ impl RaftRpc for RaftRpcImpl {
                 };
                 return Ok(tonic::Response::new(reply));
             }
-            let mut leader_client = get_channel(leader_socket.unwrap()).await.unwrap();
-            match tokio::time::timeout(Duration::from_millis(2000), leader_client.dequeue(request)).await {
+            let mut leader_client = get_channel_with_default_timeout(leader_socket.unwrap()).await.unwrap();
+            match tokio::time::timeout(Duration::from_millis(UPPER_CEIL_MS), leader_client.dequeue(request)).await {
                 Ok(reply) => {
                     match reply {
                         Ok(response) => {
@@ -1127,8 +1167,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         print_status("Sending join request").await;
         let sockets = get_sockets_from_config().await;
+        let mut success_join: bool = false;
         for socket in sockets {
-            let mut client = match get_channel(socket).await {
+            let mut client = match get_channel_with_default_timeout(socket).await {
                 Some(client) => client,
                 None => continue,
             };
@@ -1141,23 +1182,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         print_status("Join request success").await;
                         // load config again
                         load_config().await;
+                        success_join = true;
                         break;
                     } else {
-                        print_status("Join request failed").await;
+                        print_status("Join request rejected").await;
                         // exit
                         return Ok(());
                     }
                 }
                 Err(_) => {
-                    print_status("Join request failed").await;
+                    print_status("Join request not responded").await;
                     // exit
                     return Ok(());
                 }
             }
         }
+        if !success_join {
+            print_status("No node responded at all").await;
+            // exit
+            return Ok(());
+        }
     } else {
         // if no node in config, insert self to config
-        print_status("No nod, inserting self to config").await;
+        print_status("No node, inserting self to config").await;
         insert_to_config(addr).await;
         save_config().await;
     }
@@ -1170,8 +1217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(_) => {},
                 Err(_) => {
                     println!("Error starting server, exiting!");
-                    // abort thread
-                    return;
+                    panic!();
                 }
             }
         }
@@ -1213,7 +1259,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 NodeState::Leader => {
                     // blast heartbeat to all nodes every 100ms
-                    replicate_log_to_all_followers().await;
+                    tokio::spawn(replicate_log_to_all_followers()); // fire and forget
+                    print_status("Heartbeat sent").await;
                     tokio::time::sleep(Duration::from_millis(HEARTBEAT_MS)).await;
                 }
             }

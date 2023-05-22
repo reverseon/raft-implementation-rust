@@ -21,6 +21,12 @@ path = "src/coba.rs"
 name = "http-interface"
 path = "src/http_interface.rs"
 
+[profile.release]
+panic = 'abort'
+
+[profile.dev]
+panic = 'abort'
+
 [dependencies]
 prost = "0.11.9"
 tokio = { version = "1.28.0", features = ["macros", "rt-multi-thread"] }
