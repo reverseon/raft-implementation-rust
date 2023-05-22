@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("-----------------------------");
     let mut clusterconfig = Config::new();
     clusterconfig.load_from_json("cfg/config.json".to_string());
-    let mut client: Option<RaftRpcClient<Channel>> = None;
+    let mut client: Option<RaftRpcClient<Channel>>;
     // convert hashset to vector
     let sockets = clusterconfig.node_address_list.iter().cloned().collect::<Vec<SocketAddr>>();
     // print whole cluster members

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::net::SocketAddr;
-use tonic::transport::{Channel, Endpoint};
+use tonic::transport::{Channel};
 use super::rpc::raftrpc::raft_rpc_client::RaftRpcClient;
 
 #[derive(Clone)]

@@ -3,25 +3,21 @@ pub mod helper;
 // REFERENCE
 // https://www.youtube.com/watch?v=uXEYuDwm7e4
 
-use std::cmp::{min, max};
-use std::future::{IntoFuture, Future};
+use std::cmp::{min};
 use std::net::{SocketAddr, Ipv4Addr, IpAddr};
 use std::sync::{Arc};
 use tokio::sync::{RwLock};
-use tonic::codegen::http::response;
-use std::time::{Instant, Duration};
-use std::collections::{HashSet, HashMap, VecDeque};
+use std::time::{Duration};
+use std::collections::{HashSet};
 use rand::Rng;
 
 
 use helper::config::Config;
-use helper::node::{Node, self};
+use helper::node::{Node};
 use helper::timer::{
     RandomizedTimer,
-    get_randomized_duration,
 };
 use helper::state::NodeState;
-use helper::election::ElectionState;
 use helper::rpc::raftrpc::raft_rpc_server::{RaftRpc, RaftRpcServer};
 use helper::rpc::raftrpc::{
     LogEntry, AppendEntriesRequest, AppendEntriesResponse, RequestVoteRequest, 
@@ -32,7 +28,7 @@ use helper::rpc::raftrpc::{
     StatusRequest, StatusResponse,
 };
 use helper::rpc::raftrpc::raft_rpc_client::RaftRpcClient;
-use tonic::{transport::{Server, Channel, Endpoint}, Request, Response, Status};
+use tonic::{transport::Channel, Request, Response};
 
 const CONFIG_PATH: &str = "cfg/config.json";
 static mut CONFIG : Option<RwLock<Config>> = None;
@@ -159,6 +155,7 @@ async fn get_log_entry (index: usize) -> LogEntry {
     }
 }
 
+#[allow(dead_code)]
 async fn set_log_entry (index: usize, entry: LogEntry) {
     unsafe {
         let mut locknode = NODE_INSTANCE.as_mut().unwrap().write().await;
@@ -175,6 +172,7 @@ async fn append_to_log (entry: LogEntry) {
     }
 }
 
+#[allow(dead_code)]
 async fn set_log_entries (entries: Vec<LogEntry>) {
     unsafe {
         let mut locknode = NODE_INSTANCE.as_mut().unwrap().write().await;
@@ -1094,7 +1092,7 @@ impl RaftRpc for RaftRpcImpl {
     }
     async fn read_queue(
         &self,
-        request: tonic::Request<ReadQueueRequest>,
+        _: tonic::Request<ReadQueueRequest>,
     ) -> Result<tonic::Response<ReadQueueResponse>, tonic::Status> {
         print_status("Got a read queue request").await;
         Ok(
@@ -1106,7 +1104,7 @@ impl RaftRpc for RaftRpcImpl {
     }
     async fn status(
         &self,
-        request: tonic::Request<StatusRequest>,
+        _: tonic::Request<StatusRequest>,
     ) -> Result<tonic::Response<StatusResponse>, tonic::Status> {
         print_status("Got a status request").await;
         let reply = StatusResponse {

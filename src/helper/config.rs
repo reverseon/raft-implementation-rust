@@ -1,4 +1,4 @@
-use std::{collections::HashSet, hash::Hash};
+use std::{collections::HashSet};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Config {

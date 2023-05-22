@@ -1,4 +1,3 @@
-use serde::Serialize;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum NodeState {

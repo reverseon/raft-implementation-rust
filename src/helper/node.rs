@@ -2,9 +2,6 @@ use std::collections::HashMap;
 
 use super::rpc::raftrpc::LogEntry;
 use super::state::NodeState;
-use serde::ser::{
-    SerializeStruct
-};
 
 
 #[derive(serde::Serialize, serde::Deserialize)]

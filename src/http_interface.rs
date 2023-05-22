@@ -4,8 +4,7 @@ use std::net::SocketAddr;
 
 use actix_web::{get, App, HttpResponse, HttpServer, Responder, http::header};
 use helper::rpc::raftrpc::{
-    LogEntry,
-    StatusRequest, StatusResponse,
+    StatusRequest, 
     raft_rpc_client::RaftRpcClient,
 };
 
@@ -13,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use helper::node::LogEntryWritable;
 use helper::node::Persistent;
 use helper::config::Config;
-use tonic::transport::Channel;
 
 #[derive(Serialize, Deserialize)]
 struct NodeInfo {
