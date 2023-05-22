@@ -41,6 +41,8 @@ static mut PORT: u16 = 24341;
 static mut NODE_INSTANCE: Option<RwLock<Node>> = None;
 static mut HEARTBEAT_TIMER: Option<RwLock<RandomizedTimer>> = None;
 static mut STATE_MACHINE: Option<RwLock<helper::queue::Queue>> = None;
+static mut LAST_EXECUTED_COMMAND: Option<RwLock<String>> = None;
+static mut LAST_EXECUTED_COMMAND_RESULT: Option<RwLock<String>> = None;
 // static mut ELECTION_TIMER: Option<RwLock<RandomizedTimer>> = None;
 const LOWER_CEIL_MS: u64 = 15000;
 const UPPER_CEIL_MS: u64 = 30000;
@@ -48,6 +50,32 @@ const HEARTBEAT_MS: u64 = 1000;
 
 
 // HELPER FUNCTION THAT NEEDS DIRECT REFERENCE
+
+async fn get_last_executed_command () -> String {
+    unsafe {
+        LAST_EXECUTED_COMMAND.as_ref().unwrap().read().await.clone()
+    }
+}
+
+async fn set_last_executed_command (cmd: String) {
+    unsafe {
+        let mut last_executed_command = LAST_EXECUTED_COMMAND.as_ref().unwrap().write().await;
+        *last_executed_command = cmd;
+    }
+}
+
+async fn get_last_executed_command_result() -> String {
+    unsafe  {
+        LAST_EXECUTED_COMMAND_RESULT.as_ref().unwrap().read().await.clone()
+    }
+}
+
+async fn set_last_executed_command_result (result: String) {
+    unsafe {
+        let mut last_executed_command_result = LAST_EXECUTED_COMMAND_RESULT.as_ref().unwrap().write().await;
+        *last_executed_command_result = result;
+    }
+}
 
 async fn print_status<S: AsRef<str>>(msg: S) {
     // last 4 digits of millis
@@ -361,9 +389,9 @@ async fn acks(length: i32) -> i32 {
 }
 
 
-async fn replicate_log_to_all_followers() ->  String {        
+async fn replicate_log_to_all_followers() {        
     if get_state().await != NodeState::Leader {
-        return "Not leader".to_string();
+        return;
     }
     let mut threadset = tokio::task::JoinSet::new();
     for socket in get_sockets_from_config().await {
@@ -430,7 +458,6 @@ async fn replicate_log_to_all_followers() ->  String {
         }
     }
     // println!("");
-    let mut last_result = "No new entries to commit".to_string();
     if readyvec.len() > 0 {
         let maxrvec = *(readyvec.iter().max().unwrap());
         // println!("log term: {}", get_log_entry(maxrvec as usize - 1).await.term);
@@ -438,12 +465,13 @@ async fn replicate_log_to_all_followers() ->  String {
         if maxrvec > get_commit_index().await + 1 && get_log_entry(maxrvec as usize - 1).await.term <= get_current_term().await {
             for i in get_commit_index().await+1..maxrvec {
                 let command = get_log_entry(i as usize).await.command.clone();
-                last_result = apply_command_to_state_machine(command).await;
+                let res = apply_command_to_state_machine(command.clone()).await;
+                set_last_executed_command(command).await;
+                set_last_executed_command_result(res).await;
             }
             set_commit_index(maxrvec - 1).await;
         }
     }
-    return last_result;
 }
 
 async fn do_append_entries(prev_log_index: i32, leader_commit_index: i32, to_append: Vec<LogEntry>) {
@@ -991,6 +1019,12 @@ impl RaftRpc for RaftRpcImpl {
         print_status(format!("Got a enqueue request: {}", request.get_ref().content)).await;
         if get_state().await == NodeState::Leader {
             let content = request.get_ref().content.clone();
+            if get_last_executed_command().await == ("ENQUEUE ".to_string() + &content) && request.get_ref().is_retry {
+                let reply = EnqueueResponse {
+                    success: true,
+                };
+                return Ok(tonic::Response::new(reply));
+            }
             append_to_log(
                 LogEntry {
                     term: get_current_term().await,
@@ -1008,34 +1042,15 @@ impl RaftRpc for RaftRpcImpl {
             // forward to leader
             let leader_socket = get_leader_address().await;
             if leader_socket == None {
-                let reply = EnqueueResponse {
-                    success: false,
-                };
-                return Ok(tonic::Response::new(reply));
+                return Err(tonic::Status::new(tonic::Code::Unavailable, "No leader found"));   
             }
-            let mut leader_client = get_channel_with_default_timeout(leader_socket.unwrap()).await.unwrap();
-            match tokio::time::timeout(Duration::from_millis(UPPER_CEIL_MS), leader_client.enqueue(request)).await {
-                Ok(reply) => {
-                    match reply {
-                        Ok(response) => {
-                            return Ok(response);
-                        }
-                        Err(_) => {
-                            let reply = EnqueueResponse {
-                                success: false,
-                            };
-                            return Ok(tonic::Response::new(reply));
-                        }
-                    }
-                }
-                Err(_) => {
-                    let reply = EnqueueResponse {
-                        success: false,
-                    };
-                    Ok(tonic::Response::new(reply))
-                }
-            }
+            let mut leader_client = match get_channel_with_default_timeout(leader_socket.unwrap()).await {
+                Some(client) => client,
+                None => return Err(tonic::Status::new(tonic::Code::Unavailable, "No leader found")),
+            };
+            return leader_client.enqueue(request).await;
         }
+            
     }
     async fn dequeue(
         &self,
@@ -1043,6 +1058,13 @@ impl RaftRpc for RaftRpcImpl {
     ) -> Result<tonic::Response<DequeueResponse>, tonic::Status> {
         print_status("Got a dequeue request").await;
         if get_state().await == NodeState::Leader {
+            if get_last_executed_command().await == "DEQUEUE" && request.get_ref().is_retry {
+                let reply = DequeueResponse {
+                    success: true,
+                    content: get_last_executed_command_result().await,
+                };
+                return Ok(tonic::Response::new(reply));
+            }
             append_to_log(
                 LogEntry {
                     term: get_current_term().await,
@@ -1051,46 +1073,23 @@ impl RaftRpc for RaftRpcImpl {
                 }
             ).await;
             set_match_index(SocketAddr::new(HOST, get_port()), get_last_log_index().await).await;
-            let res = replicate_log_to_all_followers().await; 
+            replicate_log_to_all_followers().await; 
             let reply = DequeueResponse {
                 success: true,
-                content: res,
+                content: get_last_executed_command_result().await,
             };
             Ok(tonic::Response::new(reply))
         } else {
             // forward to leader
             let leader_socket = get_leader_address().await;
             if leader_socket == None {
-                let reply = DequeueResponse {
-                    success: false,
-                    content: "".to_string(),
-                };
-                return Ok(tonic::Response::new(reply));
+                return Err(tonic::Status::new(tonic::Code::Unavailable, "No leader found"));   
             }
-            let mut leader_client = get_channel_with_default_timeout(leader_socket.unwrap()).await.unwrap();
-            match tokio::time::timeout(Duration::from_millis(UPPER_CEIL_MS), leader_client.dequeue(request)).await {
-                Ok(reply) => {
-                    match reply {
-                        Ok(response) => {
-                            return Ok(response);
-                        }
-                        Err(_) => {
-                            let reply = DequeueResponse {
-                                success: false,
-                                content: "".to_string(),
-                            };
-                            return Ok(tonic::Response::new(reply));
-                        }
-                    }
-                }
-                Err(_) => {
-                    let reply = DequeueResponse {
-                        success: false,
-                        content: "".to_string(),
-                    };
-                    Ok(tonic::Response::new(reply))
-                }
-            }
+            let mut leader_client = match get_channel_with_default_timeout(leader_socket.unwrap()).await {
+                Some(client) => client,
+                None => return Err(tonic::Status::new(tonic::Code::Unavailable, "No leader found")),
+            };
+            return leader_client.dequeue(request).await;
         }
     }
     async fn read_queue(
@@ -1150,6 +1149,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     unsafe {
         STATE_MACHINE = Some(RwLock::new(helper::queue::Queue::new()));
+    }
+
+    unsafe {
+        LAST_EXECUTED_COMMAND_RESULT = Some(RwLock::new("".to_string()));
+    }
+
+    unsafe {
+        LAST_EXECUTED_COMMAND = Some(RwLock::new("".to_string()));
     }
 
     // CONFIG

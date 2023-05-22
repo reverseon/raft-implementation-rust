@@ -98,5 +98,5 @@ async fn main() -> std::io::Result<()> {
     println!("Starting HTTP Interface on port {}", port);
     HttpServer::new(|| {
         App::new().service(status)
-    }).bind(("127.0.0.1", port))?.run().await
+    }).bind(("0.0.0.0", port))?.run().await
 }

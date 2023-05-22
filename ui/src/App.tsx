@@ -18,11 +18,12 @@ import { useEffect, useState } from 'react';
 import WaifuRojan from './assets/mahiru.jpeg';
 import Axios from 'axios';
 
-const HTTP_INTERFACE = 'http://localhost:1227/';
+const HTTP_INTERFACE = 'http://192.168.42.5:1227/'; // address disesuaikan DHCP saat demo
 
 function App() {
   const [nodeInfo, setNodeInfo] = useState<any>([]);
   const [leader, setLeader] = useState('-');
+  const [lastUpdatedTime, setLastUpdatedTime] = useState('-');
 
   useEffect(() => {
     const fetch = async () => {
@@ -32,7 +33,16 @@ function App() {
         setLeader(
           data.find((item: any) => item.state === 'Follower').leader_address
         );
-        setNodeInfo(data.filter((item: any) => item.state !== 'Leader'));
+        // setNodeInfo(data);
+        // set node info with data sorted by address
+        setNodeInfo(
+          data.sort((a: any, b: any) => {
+            if (a.address < b.address) return -1;
+            if (a.address > b.address) return 1;
+            return 0;
+          })
+        )
+        setLastUpdatedTime(new Date().toLocaleTimeString());
       } catch (err) {
         console.log(err);
         setNodeInfo([]);
@@ -56,10 +66,13 @@ function App() {
           <Heading size='md' color='white'>
             Status Node
           </Heading>
+          <Text>
+            Last Updated: <b>{lastUpdatedTime}</b>
+          </Text>
           <Text as='b' color='#FEFEFE'>
             Current Leader:{` ${leader}`}
           </Text>
-          <Accordion allowMultiple>
+          <Accordion allowToggle>
             {nodeInfo.length > 0 ? (
               nodeInfo.map((item: any, index: number) => (
                 <AccordionItem key={index}>

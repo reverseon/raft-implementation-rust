@@ -55,6 +55,7 @@ message UpdateConfigResponse {
 
 message EnqueueRequest {
     string content = 1;
+    bool isRetry = 2;
 }
 
 message EnqueueResponse {
@@ -62,6 +63,7 @@ message EnqueueResponse {
 }
 
 message DequeueRequest {
+    bool isRetry = 1;
 }
 
 message DequeueResponse {
