@@ -41,7 +41,7 @@ function App() {
             if (a.address > b.address) return 1;
             return 0;
           })
-        )
+        );
         setLastUpdatedTime(new Date().toLocaleTimeString());
       } catch (err) {
         console.log(err);
@@ -59,7 +59,6 @@ function App() {
       backgroundSize='cover'
       minH='100vh'
       position='relative'
-      overflow='hidden'
     >
       <AbsoluteCenter px={10} py={4} borderRadius='xl' bg='#D8A8A8BB'>
         <Flex flexDir='column' gap={2} minW='1000px'>
@@ -75,7 +74,7 @@ function App() {
           <Accordion allowToggle>
             {nodeInfo.length > 0 ? (
               nodeInfo.map((item: any, index: number) => (
-                <AccordionItem key={index}>
+                <AccordionItem key={index} isDisabled={!item.is_online}>
                   <AccordionButton>
                     <Box as='span' flex='1'>
                       <Flex
@@ -97,7 +96,7 @@ function App() {
                     </Box>
                     <AccordionIcon />
                   </AccordionButton>
-                  <AccordionPanel pb={4}>
+                  <AccordionPanel pb={4} maxH='200px' overflowY='auto'>
                     <UnorderedList>
                       <ListItem>Term: {item.term}</ListItem>
                       <ListItem>State: {item.state}</ListItem>
