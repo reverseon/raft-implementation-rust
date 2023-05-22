@@ -1030,7 +1030,7 @@ impl RaftRpc for RaftRpcImpl {
                     index: get_log_len().await,
                 }
             ).await;
-            set_last_applied(get_log_len().await).await;
+            set_last_applied(get_log_len().await-1).await;
             set_match_index(SocketAddr::new(HOST, get_port()), get_last_log_index().await).await;
             replicate_log_to_all_followers().await; 
             let reply = EnqueueResponse {
@@ -1071,7 +1071,7 @@ impl RaftRpc for RaftRpcImpl {
                     index: get_log_len().await,
                 }
             ).await;
-            set_last_applied(get_log_len().await).await;
+            set_last_applied(get_log_len().await-1).await;
             set_match_index(SocketAddr::new(HOST, get_port()), get_last_log_index().await).await;
             replicate_log_to_all_followers().await; 
             let reply = DequeueResponse {
