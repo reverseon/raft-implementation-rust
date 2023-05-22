@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react';
 import WaifuRojan from './assets/mahiru.jpeg';
 import Axios from 'axios';
 
-const HTTP_INTERFACE = 'http://192.168.42.5:1227/'; // address disesuaikan DHCP saat demo
+const HTTP_INTERFACE = 'http://localhost:1227/'; // address disesuaikan DHCP saat demo
 
 function App() {
   const [nodeInfo, setNodeInfo] = useState<any>([]);
