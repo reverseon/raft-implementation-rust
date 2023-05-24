@@ -1,0 +1,110 @@
+syntax="proto3";
+package raftrpc;
+
+
+message AppendEntriesRequest {
+    int32 term = 1;
+    int32 leaderId = 2;
+    int32 prevLogIndex = 3;
+    int32 prevLogTerm = 4;
+    repeated LogEntry entries = 5;
+    int32 leaderCommit = 6;
+    string leaderAddress = 7;
+}
+
+message AppendEntriesResponse {
+    int32 term = 1;
+    bool success = 2;
+    int32 lastAppliedIndex = 3;
+}
+
+message RequestVoteRequest {
+    int32 term = 1;
+    int32 candidateId = 2;
+    int32 lastLogIndex = 3;
+    int32 lastLogTerm = 4;
+    string candidateAddress = 5;
+}
+
+message RequestVoteResponse {
+    int32 term = 1;
+    bool voteGranted = 2;
+}
+
+message LogEntry {
+    int32 term = 1;
+    int32 index = 2;
+    string command = 3;
+}
+
+message JoinRequest {
+    string address = 1;
+}
+
+message JoinResponse {
+    bool success = 1;
+}
+
+message UpdateConfigRequest {
+    repeated string addresses = 1;
+}
+
+message UpdateConfigResponse {
+    bool success = 1;
+}
+
+message EnqueueRequest {
+    string content = 1;
+    bool isRetry = 2;
+}
+
+message EnqueueResponse {
+    bool success = 1;
+}
+
+message DequeueRequest {
+    bool isRetry = 1;
+}
+
+message DequeueResponse {
+    bool success = 1;
+    string content = 2;
+}
+
+message ReadQueueRequest {
+}
+
+message ReadQueueResponse {
+    bool success = 1;
+    repeated string contents = 2;
+}
+
+message StatusRequest {
+}
+
+message StatusResponse {
+    string state = 1;
+    int32 term = 2;
+    string leaderAddress = 3;
+    repeated LogEntry log = 4;
+    int32 commitIndex = 5;
+    int32 lastAppliedIndex = 6;
+    repeated string queue = 7; 
+}
+
+message Empty {
+}
+
+service RaftRpc {
+    rpc AppendEntries(AppendEntriesRequest) returns (AppendEntriesResponse);
+    rpc RequestVote(RequestVoteRequest) returns (RequestVoteResponse);
+    rpc Heartbeat(AppendEntriesRequest) returns (Empty);
+    rpc Join(JoinRequest) returns (JoinResponse);
+    rpc UpdateConfig(UpdateConfigRequest) returns (UpdateConfigResponse);
+    rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
+    rpc Dequeue(DequeueRequest) returns (DequeueResponse);
+    rpc ReadQueue(ReadQueueRequest) returns (ReadQueueResponse);
+    rpc Status(StatusRequest) returns (StatusResponse);
+}
+
+
